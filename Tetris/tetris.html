@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polyomino Cascade - Slow Start & Pause</title>
+    <style>
+        :root { --bg-color: #202028; --text-color: #ffffff; --accent-color: #4a90e2; }
+        body { font-family: 'Segoe UI', sans-serif; background-color: var(--bg-color); color: var(--text-color); display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        #start-screen { background: #303038; padding: 30px; border-radius: 15px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 320px; }
+        input, select, button { display: block; width: 100%; margin: 15px 0; padding: 12px; border-radius: 8px; border: none; font-size: 16px; box-sizing: border-box; }
+        button { background-color: var(--accent-color); color: white; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:hover { background-color: #357abd; }
+        
+        #game-container { display: none; flex-direction: row; gap: 20px; background: #303038; padding: 20px; border-radius: 15px; position: relative; }
+        canvas { border: 2px solid #444; background-color: #111; display: block; }
+        
+        #sidebar { width: 180px; display: flex; flex-direction: column; gap: 15px; }
+        .panel { background: #404048; padding: 15px; border-radius: 10px; }
+        .panel h3 { margin: 0; color: var(--accent-color); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        .val { font-size: 24px; font-weight: bold; color: #ffeb3b; margin-top: 5px; }
+        
+        #leaderboard-list { list-style: none; padding: 0; font-size: 14px; margin-top: 10px; }
+        #leaderboard-list li { display: flex; justify-content: space-between; border-bottom: 1px solid #555; padding: 4px 0; }
+
+        /* Overlay para Pausa y Game Over */
+        #overlay {
+            display: none;
+            position: absolute;
+            top: 20px; left: 20px;
+            width: 300px; height: 600px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            z-index: 10;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Polyomino Cascade</h1>
+
+    <div id="start-screen">
+        <h2>Configuración</h2>
+        <input type="text" id="initials-input" placeholder="Tus Iniciales" maxlength="3" style="text-transform: uppercase;">
+        <label>Tamaño de piezas:</label>
+        <select id="n-size-select">
+            <option value="3">3 bloques (Muy Fácil)</option>
+            <option value="4" selected>4 bloques (Normal)</option>
+            <option value="5">5 bloques (Experto)</option>
+        </select>
+        <button onclick="startGameSetup()">EMPEZAR</button>
+        <p style="font-size: 12px; color: #888;">Usa ESC para pausar durante el juego</p>
+    </div>
+
+    <div id="game-container">
+        <div id="overlay">
+            <h2 id="overlay-text">PAUSA</h2>
+            <p id="overlay-subtext">Pulsa ESC para continuar</p>
+        </div>
+
+        <canvas id="tetris-canvas" width="300" height="600"></canvas>
+        
+        <div id="sidebar">
+            <div class="panel">
+                <h3>Jugador</h3>
+                <div id="player-display" class="val">---</div>
+                <h3>Puntuación</h3>
+                <div id="score-display" class="val">0</div>
+                <h3>Nivel</h3>
+                <div id="level-display" class="val">0</div>
+            </div>
+            <div class="panel">
+                <h3>Top Scores</h3>
+                <ul id="leaderboard-list"></ul>
+            </div>
+            <p style="font-size: 11px; color: #aaa;">Flecha arriba: Rotar<br>ESC: Pausa</p>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('tetris-canvas');
+    const ctx = canvas.getContext('2d');
+    const overlay = document.getElementById('overlay');
+    const ROWS = 20;
+    const COLS = 10;
+    const BLOCK_SIZE = 30;
+    const COLORS = [null, '#FF0D72', '#0DC2FF', '#0DFF72', '#F538FF', '#FF8E0D', '#FFE138', '#3877FF'];
+
+    const N_OMINOES = {
+        3: [[[1,1,1]], [[1,1],[1,0]], [[1,1],[0,1]]],
+        4: [[[1,1,1,1]], [[1,1],[1,1]], [[0,1,0],[1,1,1]], [[1,0,0],[1,1,1]], [[0,0,1],[1,1,1]], [[0,1,1],[1,1,0]], [[1,1,0],[0,1,1]]],
+        5: [[[1,1,1,1,1]], [[1,1,1],[1,0,0],[1,0,0]], [[0,1,0],[1,1,1],[0,1,0]], [[1,1,1],[1,0,1]], [[1,1,0],[0,1,1],[0,1,0]], [[1,1,1],[0,0,1],[0,0,1]], [[0,1,1],[1,1,0],[1,0,0]], [[1,1,1],[0,1,0],[0,1,0]]]
+    };
+
+    let grid = [];
+    let score = 0;
+    let level = 0;
+    let linesClearedTotal = 0;
+    let currentPiece = null;
+    let dropCounter = 0;
+    let lastTime = 0;
+    let gameOver = false;
+    let isPaused = false;
+    let playerInitials = "";
+    let chosenN = 4;
+    let isSoftDropping = false;
+
+    // --- NUEVA LÓGICA DE VELOCIDAD (Más lenta al inicio) ---
+    function getDropInterval() {
+        // Nivel 0: 1000ms (1 segundo por bloque -> 20 segundos total)
+        // Nivel 100: 25ms (0.5 segundos total)
+        const startInterval = 1000; 
+        const endInterval = 25;
+        const progress = level / 100;
+        return startInterval - (progress * (startInterval - endInterval));
+    }
+
+    function startGameSetup() {
+        playerInitials = document.getElementById('initials-input').value.trim().toUpperCase() || "AAA";
+        chosenN = parseInt(document.getElementById('n-size-select').value);
+        document.getElementById('start-screen').style.display = 'none';
+        document.getElementById('game-container').style.display = 'flex';
+        document.getElementById('player-display').textContent = playerInitials;
+        resetGame();
+        update();
+    }
+
+    function resetGame() {
+        grid = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+        score = 0; level = 0; linesClearedTotal = 0;
+        gameOver = false;
+        isPaused = false;
+        overlay.style.display = 'none';
+        updateUI();
+        loadLeaderboard();
+        createNewPiece();
+    }
+
+    function togglePause() {
+        if (gameOver) return;
+        isPaused = !isPaused;
+        overlay.style.display = isPaused ? 'flex' : 'none';
+        document.getElementById('overlay-text').innerText = "PAUSA";
+        document.getElementById('overlay-subtext').innerText = "Pulsa ESC para continuar";
+        if (!isPaused) {
+            lastTime = performance.now();
+            update();
+        }
+    }
+
+    function createNewPiece() {
+        const shapes = N_OMINOES[chosenN];
+        const shape = shapes[Math.floor(Math.random() * shapes.length)];
+        currentPiece = {
+            matrix: shape,
+            pos: { x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 },
+            color: 1 + Math.floor(Math.random() * (COLORS.length - 1))
+        };
+        if (collide(grid, currentPiece)) {
+            gameOver = true;
+            handleGameOver();
+        }
+    }
+
+    function collide(grid, piece) {
+        const [m, o] = [piece.matrix, piece.pos];
+        for (let y = 0; y < m.length; ++y) {
+            for (let x = 0; x < m[y].length; ++x) {
+                if (m[y][x] !== 0 && (grid[y + o.y] && grid[y + o.y][x + o.x]) !== 0) return true;
+            }
+        }
+        return false;
+    }
+
+    function merge(grid, piece) {
+        piece.matrix.forEach((row, y) => {
+            row.forEach((value, x) => {
+                if (value !== 0) grid[y + piece.pos.y][x + piece.pos.x] = piece.color;
+            });
+        });
+    }
+
+    function playerDrop() {
+        currentPiece.pos.y++;
+        if (collide(grid, currentPiece)) {
+            currentPiece.pos.y--;
+            merge(grid, currentPiece);
+            clearLines();
+            createNewPiece();
+        }
+        dropCounter = 0;
+    }
+
+    function clearLines() {
+        let rowsCleared = 0;
+        outer: for (let y = ROWS - 1; y >= 0; --y) {
+            for (let x = 0; x < COLS; ++x) if (grid[y][x] === 0) continue outer;
+            grid.splice(y, 1);
+            grid.unshift(Array(COLS).fill(0));
+            rowsCleared++;
+            y++;
+        }
+        if (rowsCleared > 0) {
+            score += [0, 100, 300, 500, 800][Math.min(rowsCleared, 4)] * (level + 1);
+            linesClearedTotal += rowsCleared;
+            level = Math.min(100, Math.floor(linesClearedTotal / 5)); // Sube nivel cada 5 líneas para que se note la progresión
+            applyCascade();
+            updateUI();
+        }
+    }
+
+    function applyCascade() {
+        let moved = true;
+        while (moved) {
+            moved = false;
+            for (let x = 0; x < COLS; x++) {
+                for (let y = ROWS - 2; y >= 0; y--) {
+                    if (grid[y][x] !== 0 && grid[y+1][x] === 0) {
+                        grid[y+1][x] = grid[y][x];
+                        grid[y][x] = 0;
+                        moved = true;
+                    }
+                }
+            }
+        }
+    }
+
+    function updateUI() {
+        document.getElementById('score-display').innerText = score;
+        document.getElementById('level-display').innerText = level;
+    }
+
+    function handleGameOver() {
+        document.getElementById('overlay-text').innerText = "FIN DEL JUEGO";
+        document.getElementById('overlay-subtext').innerText = "Puntos: " + score;
+        overlay.style.display = 'flex';
+        saveScore();
+        setTimeout(() => {
+            if(confirm("¿Quieres jugar otra vez?")) {
+                location.reload();
+            }
+        }, 1500);
+    }
+
+    function update(time = 0) {
+        if (gameOver || isPaused) return;
+        
+        const deltaTime = time - lastTime;
+        lastTime = time;
+        dropCounter += deltaTime;
+
+        const interval = isSoftDropping ? getDropInterval() / 15 : getDropInterval();
+
+        if (dropCounter > interval) playerDrop();
+        
+        draw();
+        requestAnimationFrame(update);
+    }
+
+    function draw() {
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        drawMatrix(grid, {x: 0, y: 0});
+        drawMatrix(currentPiece.matrix, currentPiece.pos, currentPiece.color);
+    }
+
+    function drawMatrix(matrix, offset, colorIdx = null) {
+        matrix.forEach((row, y) => {
+            row.forEach((value, x) => {
+                let cell = colorIdx !== null ? (value ? colorIdx : 0) : value;
+                if (cell !== 0) {
+                    ctx.fillStyle = COLORS[cell];
+                    ctx.fillRect((x + offset.x) * BLOCK_SIZE, (y + offset.y) * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+                    ctx.strokeRect((x + offset.x) * BLOCK_SIZE, (y + offset.y) * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                }
+            });
+        });
+    }
+
+    function rotate(matrix) {
+        return matrix[0].map((_, i) => matrix.map(row => row[i]).reverse());
+    }
+
+    // --- CONTROLES ---
+    document.addEventListener('keydown', e => {
+        if (e.key === "Escape") {
+            togglePause();
+            return;
+        }
+
+        if (gameOver || isPaused) return;
+
+        if (e.key === "ArrowLeft") { 
+            currentPiece.pos.x--; 
+            if(collide(grid, currentPiece)) currentPiece.pos.x++; 
+        }
+        if (e.key === "ArrowRight") { 
+            currentPiece.pos.x++; 
+            if(collide(grid, currentPiece)) currentPiece.pos.x--; 
+        }
+        if (e.key === "ArrowDown") isSoftDropping = true;
+        if (e.key === "ArrowUp") {
+            const old = currentPiece.matrix;
+            currentPiece.matrix = rotate(currentPiece.matrix);
+            if(collide(grid, currentPiece)) currentPiece.matrix = old;
+        }
+    });
+
+    document.addEventListener('keyup', e => { 
+        if (e.key === "ArrowDown") isSoftDropping = false; 
+    });
+
+    function saveScore() {
+        let scores = JSON.parse(localStorage.getItem('polyScores')) || [];
+        scores.push({name: playerInitials, score: score});
+        scores.sort((a,b) => b.score - a.score);
+        localStorage.setItem('polyScores', JSON.stringify(scores.slice(0, 5)));
+        loadLeaderboard();
+    }
+
+    function loadLeaderboard() {
+        const list = document.getElementById('leaderboard-list');
+        list.innerHTML = '';
+        let scores = JSON.parse(localStorage.getItem('polyScores')) || [];
+        scores.forEach(s => {
+            list.innerHTML += `<li><span>${s.name}</span><span>${s.score}</span></li>`;
+        });
+    }
+</script>
+</body>
+</html>

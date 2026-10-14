@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>FreeCell Progresivo v2</title>
+    <style>
+        :root {
+            --bg-color: #1a1d23;
+            --panel-color: #2c313c;
+            --accent-color: #61dafb;
+            --card-red: #e74c3c;
+            --card-black: #2d3436;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg-color);
+            color: white; margin: 0;
+            display: flex; flex-direction: column; align-items: center;
+        }
+
+        #ui-layer {
+            width: 100%; background: var(--panel-color);
+            padding: 15px 0; display: flex; justify-content: space-around;
+            border-bottom: 2px solid var(--accent-color);
+            position: sticky; top: 0; z-index: 100;
+        }
+
+        #game-container { margin-top: 30px; display: flex; flex-direction: column; gap: 30px; }
+
+        /* Intercambio de posiciones: Bases a la Izquierda, Libres a la Derecha */
+        #top-row {
+            display: grid;
+            grid-template-columns: repeat(4, 100px) 40px repeat(4, 100px);
+            gap: 10px;
+        }
+
+        #tableau {
+            display: grid; grid-template-columns: repeat(8, 110px);
+            gap: 10px; min-height: 600px;
+        }
+
+        .slot {
+            width: 100px; height: 145px;
+            border: 2px dashed #444; border-radius: 8px;
+            position: relative;
+        }
+
+        .card {
+            width: 100px; height: 145px;
+            background: white; border-radius: 8px;
+            position: absolute; color: black;
+            box-sizing: border-box; padding: 8px;
+            font-weight: bold; box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            cursor: grab; user-select: none;
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+
+        .card.red { color: var(--card-red); }
+        .card.black { color: var(--card-black); }
+
+        #overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: flex; justify-content: center; align-items: center; z-index: 2000;
+        }
+
+        .modal {
+            background: var(--panel-color); padding: 30px;
+            border-radius: 15px; text-align: center; width: 350px;
+            border: 2px solid var(--accent-color);
+        }
+
+        button { background: var(--accent-color); padding: 10px; border: none; border-radius: 5px; font-weight: bold; cursor: pointer; width: 100%; }
+        .hidden { display: none !important; }
+        .spacer { width: 40px; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="stat-box">ID: <span id="display-user">---</span></div>
+        <div class="stat-box">Score: <span id="display-score">0</span></div>
+        <div id="timer-box" class="stat-box">Tiempo: <span id="display-timer">00:00</span></div>
+        <div class="stat-box">Pausar (ESC)</div>
+    </div>
+
+    <div id="overlay">
+        <div class="modal">
+            <h2 id="modal-title">FREECELL</h2>
+            <div id="setup-controls">
+                <input type="text" id="user-initials" placeholder="Iniciales" maxlength="3" style="width: 100%; padding: 10px; margin-bottom: 10px;">
+                <select id="difficulty-select" style="width: 100%; padding: 10px; margin-bottom: 10px;">
+                    <option value="2">2 Palos (Rojo y Negro - 52 cartas)</option>
+                    <option value="4">4 Palos (Clásico - 52 cartas)</option>
+                </select>
+                <label><input type="checkbox" id="timer-toggle" checked> Con Tiempo</label>
+                <button onclick="startGame()" style="margin-top: 15px;">JUGAR</button>
+            </div>
+            <div id="pause-controls" class="hidden">
+                <button onclick="togglePause()">CONTINUAR</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="game-container">
+        <div id="top-row">
+            <div class="slot foundation" id="found-0" data-suit="♥"></div>
+            <div class="slot foundation" id="found-1" data-suit="♦"></div>
+            <div class="slot foundation" id="found-2" data-suit="♠"></div>
+            <div class="slot foundation" id="found-3" data-suit="♣"></div>
+            
+            <div class="spacer"></div>
+
+            <div class="slot free" id="free-0"></div>
+            <div class="slot free" id="free-1"></div>
+            <div class="slot free" id="free-2"></div>
+            <div class="slot free" id="free-3"></div>
+        </div>
+        <div id="tableau"></div>
+    </div>
+
+<script>
+    const suits = ['♥', '♦', '♠', '♣'];
+    const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+    let deck = [], isPaused = false, timerInterval, seconds = 0, score = 0;
+
+    function startGame() {
+        const init = document.getElementById('user-initials').value;
+        if (!init) return alert("Ingresa tus iniciales");
+        document.getElementById('display-user').innerText = init.toUpperCase();
+        
+        if(!document.getElementById('timer-toggle').checked) document.getElementById('timer-box').classList.add('hidden');
+        document.getElementById('overlay').classList.add('hidden');
+        
+        const diff = parseInt(document.getElementById('difficulty-select').value);
+        createDeck(diff);
+        shuffle();
+        renderTableau();
+        if(document.getElementById('timer-toggle').checked) startTimer();
+    }
+
+    function createDeck(numSuits) {
+        deck = [];
+        // Siempre creamos 52 cartas
+        if (numSuits === 2) {
+            // 26 Rojas (Corazones/Diamantes) y 26 Negras (Picas/Tréboles)
+            for(let i=0; i<2; i++) {
+                suits.forEach(suit => {
+                    if((i === 0 && (suit==='♥' || suit==='♦')) || (i === 1 && (suit==='♠' || suit==='♣'))) {
+                        ranks.forEach((rank, r) => {
+                            deck.push({ rank, suit, value: r+1, color: (suit==='♥'||suit==='♦')?'red':'black' });
+                        });
+                    }
+                });
+            }
+        } else {
+            suits.forEach(suit => {
+                ranks.forEach((rank, r) => {
+                    deck.push({ rank, suit, value: r+1, color: (suit==='♥'||suit==='♦')?'red':'black' });
+                });
+            });
+        }
+    }
+
+    function shuffle() {
+        for (let i = deck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [deck[i], deck[j]] = [deck[j], deck[i]];
+        }
+    }
+
+    function renderTableau() {
+        const container = document.getElementById('tableau');
+        container.innerHTML = '';
+        const cols = Array.from({length: 8}, () => []);
+        deck.forEach((card, i) => cols[i % 8].push(card));
+
+        cols.forEach((cards, i) => {
+            const colDiv = document.createElement('div');
+            colDiv.className = 'slot tableau-col';
+            colDiv.id = `col-${i}`;
+            colDiv.addEventListener('dragover', e => e.preventDefault());
+            colDiv.addEventListener('drop', handleDrop);
+
+            cards.forEach((card, j) => {
+                const cardEl = createCardEl(card);
+                cardEl.style.top = (j * 30) + 'px';
+                colDiv.appendChild(cardEl);
+            });
+            container.appendChild(colDiv);
+        });
+
+        document.querySelectorAll('.slot.free, .slot.foundation').forEach(slot => {
+            slot.addEventListener('dragover', e => e.preventDefault());
+            slot.addEventListener('drop', handleDrop);
+        });
+    }
+
+    function createCardEl(card) {
+        const el = document.createElement('div');
+        el.className = `card ${card.color}`;
+        el.draggable = true;
+        el.dataset.val = card.value;
+        el.dataset.suit = card.suit;
+        el.dataset.color = card.color;
+        el.innerHTML = `<div>${card.rank}${card.suit}</div><div style="align-self:center; font-size:2em">${card.suit}</div><div style="align-self:flex-end">${card.rank}${card.suit}</div>`;
+        el.addEventListener('dragstart', (e) => { draggedEl = e.target; });
+        return el;
+    }
+
+    let draggedEl = null;
+    function handleDrop(e) {
+        e.preventDefault();
+        const target = e.currentTarget;
+        const cardVal = parseInt(draggedEl.dataset.val);
+        const cardColor = draggedEl.dataset.color;
+
+        // Regla: Celdas libres (Derecha)
+        if(target.classList.contains('free') && target.children.length === 0) {
+            moveCard(draggedEl, target);
+        } 
+        // Regla: Bases (Izquierda)
+        else if(target.classList.contains('foundation')) {
+            const topCard = target.lastElementChild;
+            if(!topCard && cardVal === 1) moveCard(draggedEl, target, true);
+            else if(topCard && cardVal === parseInt(topCard.dataset.val) + 1 && draggedEl.dataset.suit === topCard.dataset.suit) moveCard(draggedEl, target, true);
+        }
+        // Regla: Columnas (Tablero)
+        else if(target.classList.contains('tableau-col')) {
+            const topCard = target.lastElementChild;
+            if(!topCard) moveCard(draggedEl, target);
+            else if(cardColor !== topCard.dataset.color && cardVal === parseInt(topCard.dataset.val) - 1) {
+                moveCard(draggedEl, target);
+            }
+        }
+    }
+
+    function moveCard(el, target, toBase = false) {
+        if(target.classList.contains('tableau-col')) el.style.top = (target.children.length * 30) + 'px';
+        else el.style.top = '0px';
+        target.appendChild(el);
+        if(toBase) { score += 50; document.getElementById('display-score').innerText = score; }
+    }
+
+    function startTimer() {
+        timerInterval = setInterval(() => {
+            if(!isPaused) {
+                seconds++;
+                const m = Math.floor(seconds/60).toString().padStart(2,'0');
+                const s = (seconds%60).toString().padStart(2,'0');
+                document.getElementById('display-timer').innerText = `${m}:${s}`;
+            }
+        }, 1000);
+    }
+
+    function togglePause() {
+        isPaused = !isPaused;
+        const overlay = document.getElementById('overlay');
+        document.getElementById('setup-controls').classList.add('hidden');
+        document.getElementById('pause-controls').classList.remove('hidden');
+        isPaused ? overlay.classList.remove('hidden') : overlay.classList.add('hidden');
+    }
+
+    window.onkeydown = (e) => { if(e.key === "Escape") togglePause(); };
+</script>
+</body>
+</html>

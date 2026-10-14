@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nonogramas - El Desafío</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --text-color: #ffffff;
+            --accent-color: #00d2ff;
+            --accent-glow: #3a7bd5;
+            --grid-line: #333333;
+            --grid-line-thick: #666666;
+            --cell-empty: #1e1e1e;
+            --cell-filled: #00d2ff;
+            --cell-x: #ff4b4b;
+            --clue-bg: #2a2a2a;
+            --panel-bg: rgba(30,30,30,0.9);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        .screen {
+            display: none;
+            width: 100%;
+            height: 100vh;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.5s ease;
+        }
+
+        .screen.active {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 30px;
+            text-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .menu-container {
+            background: var(--panel-bg);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.5);
+            text-align: center;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        input, select, button {
+            width: 100%;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 10px;
+            border: none;
+            font-size: 1.1rem;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            outline: none;
+        }
+
+        input:focus, select:focus {
+            border: 1px solid var(--accent-color);
+            box-shadow: 0 0 8px var(--accent-glow);
+        }
+
+        button {
+            background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%);
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 210, 255, 0.4);
+        }
+
+        #game-header {
+            width: 90%;
+            max-width: 800px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px 25px;
+            background: var(--panel-bg);
+            border-radius: 15px;
+            font-size: 1.2rem;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+
+        .timer-red {
+            color: var(--cell-x);
+            animation: pulse 1s infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { text-shadow: 0 0 5px var(--cell-x); }
+            to { text-shadow: 0 0 15px var(--cell-x); }
+        }
+
+        #game-board-container {
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            max-width: 95vw;
+            max-height: 80vh;
+            overflow: auto;
+            position: relative;
+        }
+
+        /* Nonogram Grid Layout */
+        .nonogram-wrapper {
+            display: grid;
+            gap: 2px;
+        }
+
+        /* Top Clues */
+        .top-clues {
+            display: grid;
+            grid-column: 2;
+        }
+
+        .clue-col {
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            align-items: center;
+            background: var(--clue-bg);
+            padding-bottom: 5px;
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: #ccc;
+        }
+
+        /* Left Clues */
+        .left-clues {
+            display: grid;
+            grid-row: 2;
+        }
+
+        .clue-row {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            background: var(--clue-bg);
+            padding-right: 10px;
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: #ccc;
+            letter-spacing: 3px;
+        }
+
+        .clue-val {
+            margin: 1px 0;
+            line-height: 1;
+        }
+
+        /* Game Grid */
+        .game-grid {
+            display: grid;
+            grid-row: 2;
+            grid-column: 2;
+            background: var(--grid-line);
+            border: 2px solid var(--grid-line-thick);
+            gap: 1px; /* Borders between cells handled by gap */
+            cursor: pointer;
+        }
+
+        .cell {
+            background: var(--cell-empty);
+            width: 30px;
+            height: 30px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: background 0.1s;
+            position: relative;
+        }
+
+        .cell:hover {
+            filter: brightness(1.5);
+        }
+
+        /* Add thick borders every 5 cells for better readability */
+        .thick-top { border-top: 2px solid var(--grid-line-thick); }
+        .thick-left { border-left: 2px solid var(--grid-line-thick); }
+
+        .cell.filled {
+            background: var(--cell-filled);
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.3);
+        }
+
+        .cell.marked::after {
+            content: '✖';
+            color: var(--cell-x);
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        #pause-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(5px);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-size: 2rem;
+            color: var(--accent-color);
+            border-radius: 15px;
+            display: none;
+        }
+
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        #leaderboard-container {
+            width: 100%;
+            max-width: 600px;
+            background: var(--panel-bg);
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            text-align: left;
+        }
+
+        th { color: var(--accent-color); }
+
+        @media (max-width: 600px) {
+            .cell { width: 20px; height: 20px; }
+            .clue-row, .clue-col { font-size: 0.7rem; }
+            h1 { font-size: 2rem; }
+        }
+    </style>
+</head>
+<body oncontextmenu="return false;">
+
+    <!-- MENU SCREEN -->
+    <div id="screen-menu" class="screen active">
+        <h1>Nonogramas</h1>
+        <div class="menu-container">
+            <input type="text" id="player-initials" placeholder="Ingresa tus iniciales (Ej: ABC)" maxlength="3" required>
+            
+            <select id="level-select">
+                <option value="0">2x2 - Cuadrado Pequeño</option>
+                <option value="1">3x3 - Cruz</option>
+                <option value="2">5x5 - Corazón</option>
+                <option value="3">5x5 - Pato</option>
+                <option value="4">10x10 - Espada</option>
+                <option value="5">10x10 - Calavera</option>
+                <option value="6">15x15 - Casa</option>
+            </select>
+
+            <button onclick="startGame()">JUGAR</button>
+            <button onclick="showLeaderboard()" style="background: transparent; border: 1px solid white; margin-top: 10px;">Ver Mejores Puntajes</button>
+        </div>
+    </div>
+
+    <!-- GAME SCREEN -->
+    <div id="screen-game" class="screen">
+        <div id="game-header">
+            <div id="info-player">Player: ---</div>
+            <div id="info-size">Nivel: ---</div>
+            <div id="info-timer">Tiempo: 00:00</div>
+        </div>
+
+        <div id="game-board-container">
+            <div id="pause-overlay">
+                <div>PAUSA</div>
+                <div style="font-size: 1rem; color: white; margin-top: 10px;">Presiona ESC para reanudar</div>
+            </div>
+            
+            <div class="nonogram-wrapper" id="nonogram-wrapper">
+                <!-- Top clues, Left clues, and Grid will be injected here -->
+            </div>
+        </div>
+
+        <div class="controls">
+            <button onclick="surrender()" style="background: #ff4b4b;">Rendirse</button>
+            <button onclick="checkWin()">Verificar Solución</button>
+        </div>
+        <p style="margin-top: 15px; font-size: 0.9rem; color: #ccc;">(Pausa con tecla ESC. Clic izq: Pintar/Alternar, Clic der: Cruz. Puedes arrastrar)</p>
+    </div>
+
+    <!-- LEADERBOARD SCREEN -->
+    <div id="screen-leaderboard" class="screen">
+        <div id="leaderboard-container">
+            <h2 style="color: var(--accent-color); margin-bottom: 20px;">Mejores Puntajes</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Pos</th>
+                        <th>Iniciales</th>
+                        <th>Tamaño</th>
+                        <th>Puntos</th>
+                    </tr>
+                </thead>
+                <tbody id="leaderboard-body">
+                    <!-- Scores injected here -->
+                </tbody>
+            </table>
+            <button onclick="showMenu()">Volver al Menú</button>
+        </div>
+    </div>
+
+    <script>
+        // Levels Data (meaningful shapes)
+        const levels = [
+            { name: "Cuadrado", rows: 2, cols: 2, data: [[1,1], [1,1]] },
+            { name: "Cruz", rows: 3, cols: 3, data: [[0,1,0], [1,1,1], [0,1,0]] },
+            { name: "Corazón", rows: 5, cols: 5, data: [
+                [0,1,0,1,0],
+                [1,1,1,1,1],
+                [1,1,1,1,1],
+                [0,1,1,1,0],
+                [0,0,1,0,0]
+            ]},
+            { name: "Pato", rows: 5, cols: 5, data: [
+                [0,1,1,0,0],
+                [1,1,1,0,0],
+                [0,1,1,1,1],
+                [0,1,1,1,1],
+                [0,0,1,1,0]
+            ]},
+            { name: "Espada", rows: 10, cols: 10, data: [
+                [0,0,0,0,0,0,0,0,1,1],
+                [0,0,0,0,0,0,0,1,1,0],
+                [0,0,0,0,0,0,1,1,0,0],
+                [0,0,0,0,0,1,1,0,0,0],
+                [0,0,0,0,1,1,0,0,0,0],
+                [0,0,0,1,1,1,0,0,0,0],
+                [0,0,1,1,1,1,1,0,0,0],
+                [0,1,1,0,1,1,1,1,0,0],
+                [1,1,0,0,0,1,1,1,1,0],
+                [1,0,0,0,0,0,1,1,0,1]
+            ]},
+            { name: "Calavera", rows: 10, cols: 10, data: [
+                [0,0,1,1,1,1,1,1,0,0],
+                [0,1,1,1,1,1,1,1,1,0],
+                [1,1,0,0,1,1,0,0,1,1],
+                [1,1,0,0,1,1,0,0,1,1],
+                [1,1,1,1,1,1,1,1,1,1],
+                [1,1,1,1,1,1,1,1,1,1],
+                [0,1,1,1,0,0,1,1,1,0],
+                [0,0,1,0,1,1,0,1,0,0],
+                [0,0,1,1,1,1,1,1,0,0],
+                [0,0,0,1,1,1,1,0,0,0]
+            ]},
+            { name: "Casa", rows: 15, cols: 15, data: [
+                [0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,1,1,1,0,0,0,0,0,0],
+                [0,0,0,0,0,1,1,0,1,1,0,0,0,0,0],
+                [0,0,0,0,1,1,0,0,0,1,1,0,0,0,0],
+                [0,0,0,1,1,0,0,0,0,0,1,1,0,0,0],
+                [0,0,1,1,1,1,1,1,1,1,1,1,1,0,0],
+                [0,1,1,0,0,0,0,0,0,0,0,0,1,1,0],
+                [1,1,0,0,0,0,0,0,0,0,0,0,0,1,1],
+                [0,0,1,1,1,1,1,1,1,1,1,1,1,0,0],
+                [0,0,1,0,0,0,0,1,0,0,0,0,1,0,0],
+                [0,0,1,0,1,1,0,1,0,1,1,0,1,0,0],
+                [0,0,1,0,1,1,0,1,0,1,1,0,1,0,0],
+                [0,0,1,0,0,0,0,1,0,0,0,0,1,0,0],
+                [0,0,1,0,0,0,0,1,0,0,0,0,1,0,0],
+                [0,0,1,1,1,1,1,1,1,1,1,1,1,0,0]
+            ]}
+        ];
+
+        // Global Game State
+        let currentLevel = null;
+        let playerGrid = []; // 0=empty, 1=filled, 2=X
+        let topClues = [];
+        let leftClues = [];
+        
+        let timerInterval;
+        let timeLeft = 0;
+        let isPaused = false;
+        let playerInitials = "";
+        
+        // Dragging state
+        let isDragging = false;
+        let dragMode = null; // What state are we painting during drag (0, 1, or 2)
+
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+
+        function showMenu() {
+            clearInterval(timerInterval);
+            showScreen('screen-menu');
+        }
+
+        function startGame() {
+            let initials = document.getElementById('player-initials').value.trim().toUpperCase();
+            if (!initials) initials = "AAA";
+            playerInitials = initials;
+
+            let levelIndex = parseInt(document.getElementById('level-select').value);
+            currentLevel = levels[levelIndex];
+
+            // Calculate Clues
+            topClues = calcTopClues(currentLevel.data, currentLevel.rows, currentLevel.cols);
+            leftClues = calcLeftClues(currentLevel.data, currentLevel.rows, currentLevel.cols);
+
+            // Initialize Player Grid
+            playerGrid = Array(currentLevel.rows).fill(null).map(() => Array(currentLevel.cols).fill(0));
+
+            // Set Timer: 2 seconds per cell
+            timeLeft = 2 * currentLevel.rows * currentLevel.cols;
+            isPaused = false;
+            document.getElementById('pause-overlay').style.display = 'none';
+
+            // Update UI
+            document.getElementById('info-player').textContent = "Jugador: " + playerInitials;
+            document.getElementById('info-size').textContent = "Tamaño: " + currentLevel.rows + "x" + currentLevel.cols;
+
+            buildGrid();
+            startTimer();
+            showScreen('screen-game');
+        }
+
+        // Logic to calculate clues
+        function calcTopClues(data, rows, cols) {
+            let clues = [];
+            for (let c = 0; c < cols; c++) {
+                let colClue = [];
+                let count = 0;
+                for (let r = 0; r < rows; r++) {
+                    if (data[r][c] === 1) count++;
+                    else if (count > 0) { colClue.push(count); count = 0; }
+                }
+                if (count > 0) colClue.push(count);
+                if (colClue.length === 0) colClue.push(0);
+                clues.push(colClue);
+            }
+            return clues;
+        }
+
+        function calcLeftClues(data, rows, cols) {
+            let clues = [];
+            for (let r = 0; r < rows; r++) {
+                let rowClue = [];
+                let count = 0;
+                for (let c = 0; c < cols; c++) {
+                    if (data[r][c] === 1) count++;
+                    else if (count > 0) { rowClue.push(count); count = 0; }
+                }
+                if (count > 0) rowClue.push(count);
+                if (rowClue.length === 0) rowClue.push(0);
+                clues.push(rowClue);
+            }
+            return clues;
+        }
+
+        // Build DOM Grid
+        function buildGrid() {
+            const wrapper = document.getElementById('nonogram-wrapper');
+            wrapper.innerHTML = '';
+            
+            // CSS Variables based on size
+            const cellSize = currentLevel.rows > 15 || currentLevel.cols > 15 ? '20px' : '30px';
+            wrapper.style.gridTemplateColumns = `max-content repeat(${currentLevel.cols}, ${cellSize})`;
+            wrapper.style.gridTemplateRows = `max-content repeat(${currentLevel.rows}, ${cellSize})`;
+
+            // 1. Top Clues
+            for (let c = 0; c < currentLevel.cols; c++) {
+                let colDiv = document.createElement('div');
+                colDiv.className = 'clue-col';
+                colDiv.style.gridRow = '1';
+                colDiv.style.gridColumn = `${c + 2}`;
+                
+                topClues[c].forEach(num => {
+                    let s = document.createElement('span');
+                    s.className = 'clue-val';
+                    s.textContent = num;
+                    colDiv.appendChild(s);
+                });
+                wrapper.appendChild(colDiv);
+            }
+
+            // 2. Left Clues
+            for (let r = 0; r < currentLevel.rows; r++) {
+                let rowDiv = document.createElement('div');
+                rowDiv.className = 'clue-row';
+                rowDiv.style.gridRow = `${r + 2}`;
+                rowDiv.style.gridColumn = '1';
+                rowDiv.textContent = leftClues[r].join(' ');
+                wrapper.appendChild(rowDiv);
+            }
+
+            // 3. Game Grid Cells
+            for (let r = 0; r < currentLevel.rows; r++) {
+                for (let c = 0; c < currentLevel.cols; c++) {
+                    let cell = document.createElement('div');
+                    cell.className = 'cell';
+                    if (r > 0 && r % 5 === 0) cell.classList.add('thick-top');
+                    if (c > 0 && c % 5 === 0) cell.classList.add('thick-left');
+
+                    cell.style.gridRow = `${r + 2}`;
+                    cell.style.gridColumn = `${c + 2}`;
+                    cell.dataset.r = r;
+                    cell.dataset.c = c;
+
+                    cell.addEventListener('mousedown', handleMouseDown);
+                    cell.addEventListener('mouseenter', handleMouseEnter);
+
+                    wrapper.appendChild(cell);
+                }
+            }
+
+            // Global mouse up to stop dragging
+            document.removeEventListener('mouseup', handleMouseUp);
+            document.addEventListener('mouseup', handleMouseUp);
+        }
+
+        function handleMouseDown(e) {
+            if (isPaused) return;
+            isDragging = true;
+            let r = parseInt(e.target.dataset.r);
+            let c = parseInt(e.target.dataset.c);
+            let currentState = playerGrid[r][c];
+
+            if (e.button === 0) { // Left click
+                // Cycle: 0 -> 1(filled) -> 2(X) -> 0
+                if (currentState === 0) dragMode = 1;
+                else if (currentState === 1) dragMode = 2;
+                else if (currentState === 2) dragMode = 0;
+            } else if (e.button === 2) { // Right click
+                // Toggle X and empty
+                dragMode = (currentState === 2) ? 0 : 2;
+            }
+
+            applyCellState(e.target, r, c, dragMode);
+        }
+
+        function handleMouseEnter(e) {
+            if (isPaused || !isDragging) return;
+            let r = parseInt(e.target.dataset.r);
+            let c = parseInt(e.target.dataset.c);
+            applyCellState(e.target, r, c, dragMode);
+        }
+
+        function handleMouseUp() {
+            isDragging = false;
+        }
+
+        function applyCellState(element, r, c, state) {
+            playerGrid[r][c] = state;
+            element.classList.remove('filled', 'marked');
+            if (state === 1) element.classList.add('filled');
+            else if (state === 2) element.classList.add('marked');
+        }
+
+        // Timer Logic
+        function startTimer() {
+            updateTimerUI();
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if (!isPaused) {
+                    timeLeft--;
+                    updateTimerUI();
+                    if (timeLeft <= 0) {
+                        clearInterval(timerInterval);
+                        alert("¡Tiempo agotado! Has perdido.");
+                        showMenu();
+                    }
+                }
+            }, 1000);
+        }
+
+        function updateTimerUI() {
+            let m = Math.floor(timeLeft / 60);
+            let s = timeLeft % 60;
+            let el = document.getElementById('info-timer');
+            el.textContent = `Tiempo: ${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+            if (timeLeft <= 10) el.classList.add('timer-red');
+            else el.classList.remove('timer-red');
+        }
+
+        // Pause with ESC key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && document.getElementById('screen-game').classList.contains('active')) {
+                togglePause();
+            }
+        });
+
+        function togglePause() {
+            isPaused = !isPaused;
+            document.getElementById('pause-overlay').style.display = isPaused ? 'flex' : 'none';
+        }
+
+        // Win Verification
+        function checkWin() {
+            let won = true;
+            for (let r = 0; r < currentLevel.rows; r++) {
+                for (let c = 0; c < currentLevel.cols; c++) {
+                    let target = currentLevel.data[r][c];
+                    let player = playerGrid[r][c] === 1 ? 1 : 0; // Evaluate Xs as empty
+                    if (target !== player) {
+                        won = false;
+                        break;
+                    }
+                }
+                if (!won) break;
+            }
+
+            if (won) {
+                clearInterval(timerInterval);
+                let score = timeLeft * currentLevel.rows * currentLevel.cols;
+                alert(`¡Felicidades! Resolviste el puzzle. Puntaje: ${score}`);
+                saveScore(score);
+                showLeaderboard();
+            } else {
+                alert("Aún no es correcto o hay celdas mal pintadas. ¡Sigue intentando!");
+            }
+        }
+
+        function surrender() {
+            clearInterval(timerInterval);
+            showMenu();
+        }
+
+        // Leaderboard (localStorage)
+        function saveScore(score) {
+            let scores = JSON.parse(localStorage.getItem('nonogramScores')) || [];
+            scores.push({
+                initials: playerInitials,
+                size: `${currentLevel.rows}x${currentLevel.cols}`,
+                points: score
+            });
+            scores.sort((a, b) => b.points - a.points); // Descending
+            scores = scores.slice(0, 10); // Keep top 10
+            localStorage.setItem('nonogramScores', JSON.stringify(scores));
+        }
+
+        function showLeaderboard() {
+            let scores = JSON.parse(localStorage.getItem('nonogramScores')) || [];
+            let tbody = document.getElementById('leaderboard-body');
+            tbody.innerHTML = '';
+
+            if (scores.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Aún no hay puntajes.</td></tr>';
+            } else {
+                scores.forEach((s, idx) => {
+                    let tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${idx + 1}</td>
+                        <td style="font-weight:bold;">${s.initials}</td>
+                        <td>${s.size}</td>
+                        <td style="color:var(--accent-color); font-weight:bold;">${s.points}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+            showScreen('screen-leaderboard');
+        }
+
+    </script>
+</body>
+</html>

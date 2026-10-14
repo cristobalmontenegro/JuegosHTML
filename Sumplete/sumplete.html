@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sumplete Challenge Pro v3</title>
+    <style>
+        :root {
+            --primary: #4a90e2;
+            --success: #27ae60;
+            --danger: #e74c3c;
+            --warning: #f39c12;
+            --bg: #f4f7f6;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: var(--bg);
+            margin: 0;
+            padding: 10px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            padding: 20px;
+            width: 100%;
+            max-width: 800px;
+            text-align: center;
+        }
+
+        .controls, .stats-bar {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .stats-item {
+            background: #eee;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.9rem;
+        }
+
+        input, select, button {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+
+        button {
+            background: var(--primary);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        #btn-tip { background: var(--warning); }
+
+        .game-area {
+            display: inline-block;
+            margin: 10px auto;
+            position: relative;
+        }
+
+        #game-board {
+            display: grid;
+            gap: 5px;
+            background: #bbb;
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .cell {
+            width: 50px;
+            height: 50px;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 4px;
+            user-select: none;
+            transition: 0.2s;
+        }
+
+        .cell.eliminated {
+            background-color: #ffdce0;
+            color: var(--danger);
+            text-decoration: line-through;
+            border: 2px solid var(--danger);
+        }
+
+        .hint {
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 900;
+            background: #ddd;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+
+        .hint.correct {
+            background-color: var(--success) !important;
+            color: white !important;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.9);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            z-index: 10;
+        }
+
+        .ranking-table {
+            width: 100%;
+            margin-top: 10px;
+            border-collapse: collapse;
+        }
+
+        .ranking-table td { padding: 8px; border-bottom: 1px solid #eee; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Sumplete Pro: Modo Carrera</h2>
+
+    <div class="controls">
+        <input type="text" id="initials" maxlength="3" placeholder="INI" value="CMC">
+        Filas: <select id="rows-select">
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+        </select>
+        Cols: <select id="cols-select">
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+        </select>
+        <button onclick="startNewGame(true)">Nueva Partida</button>
+        <button id="btn-undo" onclick="undoMove()">Deshacer</button>
+        <button id="btn-tip" onclick="useTip()">¿Tip? (-50 pts)</button>
+    </div>
+
+    <div class="stats-bar">
+        <div class="stats-item">Jugador: <span id="p-name">-</span></div>
+        <div class="stats-item">Puntos: <span id="p-score">0</span></div>
+        <div class="stats-item">Tiempo: <span id="timer">00:00</span></div>
+    </div>
+
+    <div class="game-area">
+        <div id="game-board"></div>
+        <div id="overlay">
+            <h3 id="win-msg">¡Logrado!</h3>
+            <button onclick="startNewGame(false)">Siguiente Nivel</button>
+        </div>
+    </div>
+
+    <div id="rank-container">
+        <h4>Top 5 Mejores</h4>
+        <table class="ranking-table" id="ranking-list"></table>
+    </div>
+</div>
+
+<script>
+    let board = [], solution = [], userStatus = [];
+    let gameRows = 3, gameCols = 3, totalScore = 0, complexity = 1;
+    let targetRows = [], targetCols = [];
+    let timerInterval, seconds = 0;
+    let isPlaying = false;
+    let moveHistory = [];
+
+    function startNewGame(isReset) {
+        if(isReset) {
+            totalScore = 0;
+            complexity = 1;
+            document.getElementById('p-score').innerText = "0";
+        } else {
+            complexity += 0.3; 
+        }
+
+        gameRows = parseInt(document.getElementById('rows-select').value);
+        gameCols = parseInt(document.getElementById('cols-select').value);
+        document.getElementById('p-name').innerText = document.getElementById('initials').value.toUpperCase() || "???";
+        document.getElementById('overlay').style.display = "none";
+        moveHistory = [];
+        
+        generateValidLevel();
+        render();
+        startTimer();
+        isPlaying = true;
+    }
+
+    // Nueva función para asegurar que el juego NO nazca resuelto
+    function generateValidLevel() {
+        let isTrivial = true;
+        let attempts = 0;
+
+        while(isTrivial && attempts < 50) {
+            generateLevelData();
+            
+            // Verificamos si la solución exige eliminar al menos una celda
+            for(let r=0; r<gameRows; r++) {
+                for(let c=0; c<gameCols; c++) {
+                    if(solution[r][c] === 0) {
+                        isTrivial = false;
+                        break;
+                    }
+                }
+            }
+            attempts++;
+        }
+    }
+
+    function generateLevelData() {
+        const maxNum = (gameRows === 2 && gameCols === 2) ? 15 : Math.min(9 + Math.floor(complexity * 2), 25);
+        board = Array.from({length: gameRows}, () => 
+            Array.from({length: gameCols}, () => Math.floor(Math.random() * maxNum) + 1)
+        );
+        
+        solution = Array.from({length: gameRows}, () => 
+            Array.from({length: gameCols}, () => Math.random() > 0.5 ? 1 : 0)
+        );
+        
+        // Evitar filas/columnas con suma 0
+        solution.forEach((row, i) => { if(!row.includes(1)) row[Math.floor(Math.random()*gameCols)] = 1; });
+
+        userStatus = Array.from({length: gameRows}, () => Array.from({length: gameCols}, () => 0));
+        targetRows = new Array(gameRows).fill(0);
+        targetCols = new Array(gameCols).fill(0);
+
+        for(let r=0; r<gameRows; r++) {
+            for(let c=0; c<gameCols; c++) {
+                if(solution[r][c]) {
+                    targetRows[r] += board[r][c];
+                    targetCols[c] += board[r][c];
+                }
+            }
+        }
+    }
+
+    function render() {
+        const grid = document.getElementById('game-board');
+        grid.style.gridTemplateColumns = `repeat(${gameCols + 1}, auto)`;
+        grid.innerHTML = "";
+
+        for(let r=0; r<gameRows; r++) {
+            for(let c=0; c<gameCols; c++) {
+                const cell = document.createElement('div');
+                cell.id = `cell-${r}-${c}`;
+                cell.className = `cell ${userStatus[r][c] === 1 ? 'eliminated' : ''}`;
+                cell.innerText = board[r][c];
+                cell.onclick = () => toggleCell(r, c);
+                grid.appendChild(cell);
+            }
+            const rHint = document.createElement('div');
+            rHint.id = `row-${r}`;
+            rHint.className = 'hint';
+            rHint.innerText = targetRows[r];
+            grid.appendChild(rHint);
+        }
+
+        for(let c=0; c<gameCols; c++) {
+            const cHint = document.createElement('div');
+            cHint.id = `col-${c}`;
+            cHint.className = 'hint';
+            cHint.innerText = targetCols[c];
+            grid.appendChild(cHint);
+        }
+        grid.appendChild(document.createElement('div'));
+        updateCheck();
+    }
+
+    function toggleCell(r, c) {
+        if(!isPlaying) return;
+        moveHistory.push({ r, c, oldState: userStatus[r][c], action: 'toggle' });
+        userStatus[r][c] = (userStatus[r][c] === 1) ? 0 : 1;
+        render();
+    }
+
+    function undoMove() {
+        if(!isPlaying || moveHistory.length === 0) return;
+        const lastMove = moveHistory.pop();
+        userStatus[lastMove.r][lastMove.c] = lastMove.oldState;
+        if(lastMove.action === 'tip') {
+            totalScore += 50;
+            document.getElementById('p-score').innerText = totalScore;
+        }
+        render();
+    }
+
+    function useTip() {
+        if(!isPlaying) return;
+        if(totalScore < 50) {
+            alert("Necesitas 50 puntos para un tip. ¡Sigue jugando!");
+            return;
+        }
+        
+        let found = false;
+        let cells = [];
+        for(let r=0; r<gameRows; r++) for(let c=0; c<gameCols; c++) cells.push({r,c});
+        cells.sort(() => Math.random() - 0.5);
+
+        for(let cell of cells) {
+            let shouldBeX = (solution[cell.r][cell.c] === 0);
+            let isX = (userStatus[cell.r][cell.c] === 1);
+            if(shouldBeX !== isX) {
+                // Registrar el movimiento en el historial antes de aplicarlo
+                moveHistory.push({ r: cell.r, c: cell.c, oldState: userStatus[cell.r][cell.c], action: 'tip' });
+
+                userStatus[cell.r][cell.c] = shouldBeX ? 1 : 0;
+                totalScore -= 50;
+                document.getElementById('p-score').innerText = totalScore;
+                render();
+                
+                // Highlight tip
+                const cellEl = document.getElementById(`cell-${cell.r}-${cell.c}`);
+                cellEl.style.transition = "background-color 0.5s";
+                cellEl.style.backgroundColor = "var(--warning)";
+                setTimeout(() => {
+                    cellEl.style.backgroundColor = "";
+                }, 800);
+
+                found = true;
+                break;
+            }
+        }
+        
+        if(!found) {
+            alert("¡El tablero ya está sin errores hasta ahora! Continúa.");
+        }
+    }
+
+    function updateCheck() {
+        let allRowsOk = true, allColsOk = true;
+        let anyChange = false;
+
+        for(let r=0; r<gameRows; r++) {
+            let current = 0;
+            for(let c=0; c<gameCols; c++) if(userStatus[r][c] !== 1) current += board[r][c];
+            const el = document.getElementById(`row-${r}`);
+            if(current === targetRows[r]) el.classList.add('correct');
+            else { el.classList.remove('correct'); allRowsOk = false; }
+            if(userStatus[r].includes(1)) anyChange = true;
+        }
+
+        for(let c=0; c<gameCols; c++) {
+            let current = 0;
+            for(let r=0; r<gameRows; r++) if(userStatus[r][c] !== 1) current += board[r][c];
+            const el = document.getElementById(`col-${c}`);
+            if(current === targetCols[c]) el.classList.add('correct');
+            else { el.classList.remove('correct'); allColsOk = false; }
+        }
+
+        // Solo ganar si el usuario ha hecho al menos un movimiento (para evitar el bug de nacer resuelto)
+        if(allRowsOk && allColsOk && isPlaying && anyChange) winLevel();
+    }
+
+    function winLevel() {
+        isPlaying = false;
+        clearInterval(timerInterval);
+        
+        let baseScore = Math.max(10, 100 - Math.floor(seconds / 3));
+        let finalScore = baseScore * gameRows * gameCols;
+        totalScore += finalScore;
+        
+        document.getElementById('p-score').innerText = totalScore;
+        document.getElementById('win-msg').innerText = `¡+${finalScore} pts! Nivel ${gameRows}x${gameCols} superado.`;
+        document.getElementById('overlay').style.display = "flex";
+        saveRank();
+    }
+
+    function startTimer() {
+        clearInterval(timerInterval);
+        seconds = 0;
+        document.getElementById('timer').innerText = "00:00";
+        timerInterval = setInterval(() => {
+            seconds++;
+            let m = Math.floor(seconds/60).toString().padStart(2,'0');
+            let s = (seconds%60).toString().padStart(2,'0');
+            document.getElementById('timer').innerText = `${m}:${s}`;
+        }, 1000);
+    }
+
+    function saveRank() {
+        let list = JSON.parse(localStorage.getItem('sumplete_rank') || "[]");
+        let pName = document.getElementById('p-name').innerText;
+        
+        // Find the absolute highest score for this player name (existing vs current running score)
+        let playerMaxScore = totalScore;
+        list.forEach(p => {
+            if(p.name === pName && p.score > playerMaxScore) {
+                playerMaxScore = p.score;
+            }
+        });
+        
+        // Remove all old duplicate entries for this player and push a single entry with the highest score
+        list = list.filter(p => p.name !== pName);
+        list.push({name: pName, score: playerMaxScore});
+        
+        list.sort((a,b) => b.score - a.score);
+        localStorage.setItem('sumplete_rank', JSON.stringify(list.slice(0,5)));
+        renderRank();
+    }
+
+    function renderRank() {
+        const list = JSON.parse(localStorage.getItem('sumplete_rank') || "[]");
+        document.getElementById('ranking-list').innerHTML = list.map(i => 
+            `<tr><td>${i.name}</td><td align="right">${i.score} pts</td></tr>`
+        ).join("");
+    }
+
+    renderRank();
+</script>
+</body>
+</html>

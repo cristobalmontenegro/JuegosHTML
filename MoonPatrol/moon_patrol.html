@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moon Patrol Clone</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        canvas {
+            border: 2px solid #333;
+            background-color: #000;
+            image-rendering: pixelated;
+            /* Essential for retro look */
+        }
+
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 20px;
+            text-shadow: 2px 2px #000;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        #start-screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            font-family: 'Courier New', Courier, monospace;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border: 2px solid #555;
+            z-index: 20;
+        }
+
+        h1 {
+            color: #f00;
+            text-shadow: 2px 2px #fff;
+            margin-bottom: 10px;
+        }
+
+        p {
+            margin: 5px 0;
+            font-size: 14px;
+            color: #ccf;
+        }
+
+        .blink {
+            animation: blinker 1s linear infinite;
+        }
+
+        @keyframes blinker {
+            50% {
+                opacity: 0;
+            }
+        }
+
+        #pause-screen {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            font-size: 40px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 20px;
+            z-index: 30;
+        }
+
+        #initials-container {
+            margin-top: 15px;
+        }
+
+        #initials-input {
+            background: transparent;
+            border: 2px solid #555;
+            color: white;
+            font-family: inherit;
+            font-size: 24px;
+            width: 80px;
+            text-align: center;
+            text-transform: uppercase;
+        }
+
+        .stats-table {
+            margin: 10px auto;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        .stats-table th,
+        .stats-table td {
+            padding: 5px 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        #highscore-list {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+
+        #highscore-list li {
+            margin: 3px 0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="ui">SCORE: <span id="score">000000</span> <span id="lives" style="margin-left: 20px; color: #f00;">&#10084;
+            &#10084; &#10084;</span></div>
+
+    <div id="start-screen">
+        <h1>MOON PATROL</h1>
+        <p>ARROWS to Drive / Fire Up (Up)</p>
+        <p>Z or CTRL to Fire Fwd</p>
+        <p>SPACE to Jump</p>
+        <div id="initials-container">
+            INITIALS: <input type="text" id="initials-input" maxlength="3" value="AAA">
+        </div>
+        <br>
+        <p class="blink">PRESS SPACE OR ENTER TO START</p>
+    </div>
+
+    <div id="pause-screen">PAUSED</div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        /**
+         * MOON PATROL CLONE
+         * Single file implementation
+         */
+
+        // --- CONFIGURATION ---
+        const SCREEN_WIDTH = 800;
+        const SCREEN_HEIGHT = 600;
+        const GROUND_Y = 500; // Y position where the wheels touch the "flat" ground
+
+        const GRAVITY = 0.4;
+        const JUMP_FORCE = -8;
+        const MOVE_SPEED_ACCEL = 0.1;
+        const MOVE_SPEED_DECEL = 0.05;
+        const MAX_SPEED = 6; // Max scroll speed
+        const MIN_SPEED = 0;
+
+        // Colors
+        const COLOR_SKY = "#000000";
+        const COLOR_MOUNTAIN_FAR = "#203c90"; // Dark blue
+        const COLOR_MOUNTAIN_NEAR = "#4080bf"; // Lighter blue
+        const COLOR_GROUND_HILLS = "#00a800"; // Green
+        const COLOR_GROUND_DIRT = "#d67823"; // Orange/Brown 
+        const COLOR_BUGGY = "#d00";
+        const COLOR_UFO = "#ffcc00";
+
+        // --- AUDIO SYSTEM ---
+        const Audio = {
+            ctx: null,
+            init: function () {
+                if (!this.ctx) {
+                    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+            },
+            playTone: function (freq, type, duration, vol = 0.1) {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+                gain.gain.setValueAtTime(vol, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + duration);
+            },
+            playJump: function () { this.playTone(150, 'square', 0.2); },
+            playShoot: function () { this.playTone(800, 'sawtooth', 0.1); },
+            playExplosion: function () { this.playTone(100, 'sawtooth', 0.4); },
+            playUfoFire: function () { this.playTone(200, 'sine', 0.3); }
+        };
+
+        // --- INPUT HANDLER ---
+        const Input = {
+            keys: {},
+            init: function () {
+                window.addEventListener('keydown', e => this.keys[e.key] = true);
+                window.addEventListener('keyup', e => this.keys[e.key] = false);
+            },
+            isDown: function (key) {
+                if (key === 'FireFwd') return this.keys['z'] || this.keys['Z'] || this.keys['Control'];
+                return this.keys[key];
+            }
+        };
+
+        // --- GRAPHICS HELPERS ---
+        function drawRect(ctx, x, y, w, h, color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(Math.floor(x), Math.floor(y), w, h);
+        }
+
+        function drawCircle(ctx, x, y, r, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // --- GRAPHICS HELPERS (CACHING) ---
+        const SpriteCache = {};
+
+        function getCachedSprite(map, palette, scale) {
+            const key = map + scale;
+            if (SpriteCache[key]) return SpriteCache[key];
+
+            const rows = map.trim().split('\n');
+            const h = rows.length * scale;
+            const w = rows[0].length * scale;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+
+            for (let r = 0; r < rows.length; r++) {
+                const row = rows[r];
+                for (let c = 0; c < row.length; c++) {
+                    const char = row[c];
+                    if (char !== '.' && palette[char]) {
+                        ctx.fillStyle = palette[char];
+                        ctx.fillRect(c * scale, r * scale, scale, scale);
+                    }
+                }
+            }
+            SpriteCache[key] = canvas;
+            return canvas;
+        }
+
+        function drawSprite(ctx, x, y, scale, map, palette) {
+            const sprite = getCachedSprite(map, palette, scale);
+            ctx.drawImage(sprite, Math.floor(x), Math.floor(y));
+        }
+
+        // Sprites
+        const SPRITE_BUGGY = `
+....RRRR....
+...RRRRRR...
+..RRRRRRRR..
+.RRRGGGRRRR.
+RRRG...GRRR.
+RRRG...GRRR.
+RRRGGGRRRRR.
+`;
+
+        // Represents a gun on the roof
+        const SPRITE_GUN = `
+...I...
+...I...
+..III..
+`;
+
+        const SPRITE_WHEEL = `
+.GGG.
+G...G
+G.G.G
+G...G
+.GGG.
+`;
+
+        const SPRITE_UFO = `
+...YYY...
+..YYYYY..
+.YYYYYYY.
+YYYYYYYYY
+.R.R.R.R.
+`;
+
+        // --- GAME CLASSES ---
+
+        class Game {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.canvas.width = SCREEN_WIDTH;
+                this.canvas.height = SCREEN_HEIGHT;
+
+                this.scoreElem = document.getElementById('score');
+                this.livesElem = document.getElementById('lives');
+                this.startScreen = document.getElementById('start-screen');
+                this.pauseScreen = document.getElementById('pause-screen');
+                this.initialsInput = document.getElementById('initials-input');
+
+                this.state = 'START'; // START, PLAY, GAMEOVER, DYING
+                this.paused = false;
+                this.score = 0;
+                this.gameTime = 0;
+                this.scrollSpeed = 0;
+                this.respawnTimer = 0;
+                this.initials = "AAA";
+
+                this.stats = { rocks: 0, ufos: 0, distance: 0 };
+                this.highScores = JSON.parse(localStorage.getItem('moonPatrolScores')) || [];
+
+                this.player = new Player(this);
+                this.background = new Background(this);
+                this.obstacles = []; // Craters, Rocks
+                this.enemies = [];   // UFOs
+                this.projectiles = []; // All bullets
+
+                this.lastTime = 0;
+                this.spawnTimer = 0;
+
+                Input.init();
+                window.addEventListener('keydown', e => {
+                    if (e.key === 'Escape') this.togglePause();
+                    if ((this.state === 'START' || this.state === 'GAMEOVER') && (e.key === ' ' || e.key === 'Enter')) {
+                        if (e.target === this.initialsInput) {
+                            e.preventDefault(); // Stop space character in input
+                        }
+                        this.start();
+                    }
+                });
+                // Auto-focus initials
+                setTimeout(() => this.initialsInput.focus(), 100);
+                requestAnimationFrame(t => this.loop(t));
+            }
+
+            togglePause() {
+                if (this.state !== 'PLAY') return;
+                this.paused = !this.paused;
+                this.pauseScreen.style.display = this.paused ? 'block' : 'none';
+            }
+
+            start() {
+                Audio.init();
+                this.state = 'PLAY';
+                this.paused = false;
+                this.pauseScreen.style.display = 'none';
+                this.startScreen.style.display = 'none';
+                this.initials = this.initialsInput.value || "AAA";
+                this.score = 0;
+                this.lives = 3;
+                this.stats = { rocks: 0, ufos: 0, distance: 0 };
+                this.updateLivesUI();
+                this.scrollSpeed = 0;
+                this.player.reset();
+                this.obstacles = [];
+                this.enemies = [];
+                this.projectiles = [];
+                this.spawnTimer = 0;
+                this.nextLifeScore = 5000;
+            }
+
+            updateLivesUI() {
+                let s = "";
+                for (let i = 0; i < this.lives; i++) s += "&#10084; ";
+                this.livesElem.innerHTML = s;
+
+                // Progression: check for extra life
+                if (this.score > 0 && this.score % 5000 < 100 && this.score > this.lastLifeScore + 4000) {
+                    // Simple check: every 5000-ish points
+                    // A better way is to track "next life score"
+                }
+            }
+
+            loop(timestamp) {
+                if (!this.lastTime) this.lastTime = timestamp;
+                let dt = (timestamp - this.lastTime) / 16.66;
+                this.lastTime = timestamp;
+
+                // Cap dt to prevent spiraling if frame drops
+                if (dt > 3) dt = 3;
+
+                if (this.state === 'START') {
+                    // Start is now handled via the global keydown listener to manage focus/Enter better
+                } else if (this.state === 'PLAY') {
+                    if (!this.paused) this.update(dt);
+                } else if (this.state === 'DYING') {
+                    this.updateDying(dt);
+                } else if (this.state === 'GAMEOVER') {
+                    // Same as start
+                }
+
+                this.draw();
+                requestAnimationFrame(t => this.loop(t));
+            }
+
+            update(dt) {
+                this.gameTime += dt;
+
+                // Difficulty ramping
+                const difficulty = 1 + (this.score / 5000);
+
+                // Update Scroll Speed based on Input (simulating car speed) - only if not braking hard or moving left
+                // Horizontal Movement Logic:
+                // Right -> Move Player Right + Accel Scroll
+                // Left -> Move Player Left + Decel Scroll
+
+                if (Input.isDown('ArrowRight')) {
+                    this.player.x += 3 * dt;
+                    this.scrollSpeed += MOVE_SPEED_ACCEL * dt;
+                } else if (Input.isDown('ArrowLeft')) {
+                    this.player.x -= 3 * dt;
+                    this.scrollSpeed -= MOVE_SPEED_DECEL * dt;
+                } else {
+                    // Cruise Control: No natural friction decay
+                    // this.scrollSpeed -= 0.02 * dt; 
+                }
+
+                // Clamp Speed and Player X
+                this.scrollSpeed = Math.max(MIN_SPEED, Math.min(MAX_SPEED, this.scrollSpeed));
+                this.player.x = Math.max(0, Math.min(SCREEN_WIDTH - 100, this.player.x));
+
+                // Background
+                this.background.update(dt, this.scrollSpeed);
+
+                // Player
+                this.player.update(dt);
+
+                // Spawning Logic
+                // Only spawn things if we are moving
+                if (this.scrollSpeed > 0.5) {
+                    this.spawnTimer += (this.scrollSpeed / 200) * dt;
+                    // Craters / Rocks
+                    if (Math.random() < 0.005 * difficulty && this.spawnTimer > 1) {
+                        this.spawnObstacle();
+                        this.spawnTimer = 0; // Reset spawn pressure
+                    }
+                    // UFOs
+                    if (Math.random() < 0.002 * difficulty && this.enemies.length < 3) {
+                        this.enemies.push(new Ufo(this));
+                    }
+                }
+
+                // Entities
+                this.projectiles.forEach((p, i) => {
+                    p.update(dt);
+                    if (p.remove) this.projectiles.splice(i, 1);
+                });
+
+                this.obstacles.forEach((o, i) => {
+                    o.update(dt, this.scrollSpeed);
+                    if (o.remove) this.obstacles.splice(i, 1);
+                });
+
+                this.enemies.forEach((e, i) => {
+                    e.update(dt, this.scrollSpeed);
+                    if (e.remove) this.enemies.splice(i, 1);
+                });
+
+                // Collisions
+                this.checkCollisions();
+
+                // UI
+                if (this.scrollSpeed > 0) {
+                    const dScore = Math.round(this.scrollSpeed * dt / 10);
+                    this.score += dScore;
+                    this.stats.distance += dScore / 10;
+                }
+                this.scoreElem.innerText = this.score.toString().padStart(6, '0');
+
+                // Extra Life Check
+                if (!this.nextLifeScore) this.nextLifeScore = 5000;
+                if (this.score >= this.nextLifeScore) {
+                    this.lives++;
+                    this.updateLivesUI();
+                    Audio.playJump(); // Sound cue
+                    // Flash screen?
+                    this.nextLifeScore += 5000;
+                }
+            }
+
+            spawnObstacle() {
+                // Craters and Rocks
+                // Ensure variety by tracking last spawn? Random is fine for now but lets increase probability
+                const type = Math.random() > 0.4 ? 'ROCK' : 'CRATER';
+                this.obstacles.push(new Obstacle(this, type));
+            }
+            checkCollisions() {
+                // Player vs Obstacles
+                const playerBox = this.player.getBounds();
+
+                for (let obs of this.obstacles) {
+                    const obsBox = obs.getBounds();
+                    if (rectIntersect(playerBox, obsBox)) {
+
+                        // Special check for Crater: if we are jumping HIGH enough (bottom of wheel above ground), we are safe?
+                        // Actually simple logic: if we touch a crater, we die (fell in). 
+                        // To jump OVER, we must be completely above it ideally, but let's keep it simple AABB.
+                        // Refinement: Decrease Player Hitbox slightly to be forgiving
+                        if (obs.type === 'CRATER') {
+                            // CRATER COLLISION FIX
+                            // The player "falls in" if their center is within the crater's horizontal bounds
+                            // and they are close to the ground.
+                            // If jumping HIGH over it, safe.
+                            // Crater Y is GROUND + 5. Player Y is feet.
+
+                            // Let's define a strict "Kill Zone" for the crater
+                            const craterCenter = obs.x + obs.w / 2;
+                            const playerCenter = this.player.x + this.player.w / 2;
+                            const dist = Math.abs(craterCenter - playerCenter);
+
+                            // If we are over the hole (within 20px of center)
+                            if (dist < 20) {
+                                // Must be jumping high to clear. 
+                                // Player Y increases (goes down) as numbers go up.
+                                // Jump makes Y smaller.
+                                // Ground is 500. Crater is ~500.
+                                // If Player Bottom > GroundY, they are touching ground.
+                                // Tolerance: If bottom is > GroundY - 10, they fall in.
+
+                                // FIX: Use strictly the 'y' position. If y >= GROUND_Y - h - 5 (almost on ground)
+                                // Player.y is top-left.
+                                // Player on ground: y = GROUND_Y - h
+
+                                // Intersection check is already true (rectIntersect passed)
+                                // rectIntersect checks if bounding boxes overlap.
+                                // Player Box: y + 10, h - 10.
+                                // Crater Box: y (Ground+5), h (10).
+
+                                // If the Player is jumping, their Y will be much less (higher up).
+                                // If Player Bottom > Crater Top - Leeway, then CRASH.
+
+                                const playerBottom = this.player.y + this.player.h;
+                                const craterTop = obs.y;
+
+                                // If player bottom is significantly below or near collision with crater level (meaning on ground)
+                                // Ground Y is 500. Crater Y is 505.
+                                // Player on ground bottom is 500.
+                                // If Jumping, Player bottom < 500.
+
+                                if (playerBottom >= craterTop - 15) {
+                                    this.handleDeath();
+                                }
+                            }
+                        } else {
+                            this.handleDeath();
+                        }
+                    }
+                }
+
+                // Player vs Enemy Projectiles
+                for (let p of this.projectiles) {
+                    if (!p.isPlayerShot && rectIntersect(playerBox, p.getBounds())) {
+                        this.handleDeath();
+                    }
+                }
+
+                // Projectiles vs Enemies/Rocks
+                for (let i = this.projectiles.length - 1; i >= 0; i--) {
+                    let p = this.projectiles[i];
+                    let hit = false;
+                    if (p.isPlayerShot) {
+                        // Check Enemies
+                        for (let j = this.enemies.length - 1; j >= 0; j--) {
+                            if (rectIntersect(p.getBounds(), this.enemies[j].getBounds())) {
+                                this.enemies.splice(j, 1);
+                                this.score += 100;
+                                this.stats.ufos++;
+                                Audio.playExplosion();
+                                hit = true;
+                                break;
+                            }
+                        }
+                        // Check Rocks
+                        if (!hit) {
+                            for (let k = this.obstacles.length - 1; k >= 0; k--) {
+                                let obs = this.obstacles[k];
+                                if (obs.type === 'ROCK' && rectIntersect(p.getBounds(), obs.getBounds())) {
+                                    this.obstacles.splice(k, 1);
+                                    this.score += 50;
+                                    this.stats.rocks++;
+                                    Audio.playExplosion();
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (hit) {
+                        this.projectiles.splice(i, 1);
+                    }
+                }
+            }
+
+            draw() {
+                // Clear background
+                this.ctx.fillStyle = COLOR_SKY;
+                this.ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+                this.background.draw(this.ctx);
+
+                // Draw obstacles behind player if they are "background" elements like craters? 
+                // Actually craters are on ground.
+                this.obstacles.forEach(o => o.draw(this.ctx));
+
+                this.player.draw(this.ctx);
+                this.enemies.forEach(e => e.draw(this.ctx));
+                this.projectiles.forEach(p => p.draw(this.ctx));
+
+                if (this.state === 'GAMEOVER') {
+                    this.ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                    this.ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+                    this.ctx.fillStyle = 'red';
+                    this.ctx.font = 'bold 40px "Courier New"';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.fillText("GAME OVER", SCREEN_WIDTH / 2, 80);
+
+                    this.ctx.fillStyle = 'white';
+                    this.ctx.font = '20px "Courier New"';
+                    this.ctx.fillText(`Player: ${this.initials}  Score: ${this.score}`, SCREEN_WIDTH / 2, 120);
+
+                    // Stats Table
+                    this.ctx.font = '16px "Courier New"';
+                    this.ctx.fillText(`Rocks Destroyed: ${this.stats.rocks}`, SCREEN_WIDTH / 2, 160);
+                    this.ctx.fillText(`UFOs Destroyed: ${this.stats.ufos}`, SCREEN_WIDTH / 2, 185);
+                    this.ctx.fillText(`Distance: ${Math.floor(this.stats.distance)}m`, SCREEN_WIDTH / 2, 210);
+
+                    // High Scores
+                    this.ctx.fillStyle = '#ffcc00';
+                    this.ctx.font = 'bold 20px "Courier New"';
+                    this.ctx.fillText("HIGH SCORES", SCREEN_WIDTH / 2, 260);
+
+                    this.ctx.fillStyle = 'white';
+                    this.ctx.font = '16px "Courier New"';
+                    this.highScores.slice(0, 5).forEach((entry, idx) => {
+                        this.ctx.fillText(`${idx + 1}. ${entry.name.padEnd(5, '.')} ${entry.score}`, SCREEN_WIDTH / 2, 290 + idx * 25);
+                    });
+
+                    this.ctx.fillStyle = 'white';
+                    this.ctx.font = '18px "Courier New"';
+                    this.ctx.fillText("Press SPACE to Restart", SCREEN_WIDTH / 2, SCREEN_HEIGHT - 60);
+                }
+            }
+
+            updateDying(dt) {
+                this.respawnTimer -= dt;
+                this.player.deathFrames += dt;
+                // Still scroll slightly for effect
+                this.scrollSpeed *= 0.95;
+                this.background.update(dt, this.scrollSpeed);
+
+                if (this.respawnTimer <= 0) {
+                    if (this.lives > 0) {
+                        this.state = 'PLAY';
+                        this.player.reset();
+                        this.obstacles = [];
+                        this.projectiles = [];
+                    } else {
+                        this.gameOver();
+                    }
+                }
+            }
+
+            handleDeath() {
+                if (this.state === 'DYING') return;
+                Audio.playExplosion();
+                this.lives--;
+                this.updateLivesUI();
+                this.state = 'DYING';
+                this.respawnTimer = 120; // ~2 seconds
+                this.player.isDead = true;
+            }
+
+            gameOver() {
+                this.state = 'GAMEOVER';
+                this.saveHighScore();
+            }
+
+            saveHighScore() {
+                this.highScores.push({ name: this.initials, score: this.score });
+                this.highScores.sort((a, b) => b.score - a.score);
+                this.highScores = this.highScores.slice(0, 5);
+                localStorage.setItem('moonPatrolScores', JSON.stringify(this.highScores));
+            }
+        }
+
+        class Player {
+            constructor(game) {
+                this.game = game;
+                this.w = 50;
+                this.h = 40;
+                this.reset();
+
+                this.spriteScale = 4;
+                this.wheelRot = 0;
+            }
+
+            reset() {
+                this.x = 100;
+                this.y = GROUND_Y - this.h;
+                this.dy = 0;
+                this.isJumping = false;
+                this.suspensionY = 0;
+                this.lastShotTime = 0;
+                this.isDead = false;
+                this.deathFrames = 0;
+            }
+
+            update(dt) {
+                // Jumping
+                if (Input.isDown(' ') && !this.isJumping) {
+                    this.dy = JUMP_FORCE;
+                    this.isJumping = true;
+                    Audio.playJump();
+                }
+
+                // Gravity
+                this.dy += GRAVITY * dt;
+                this.y += this.dy * dt;
+
+                // Ground collision
+                if (this.y + this.h >= GROUND_Y) {
+                    this.y = GROUND_Y - this.h;
+                    this.dy = 0;
+                    this.isJumping = false;
+                } else {
+                    this.x += Input.isDown('ArrowRight') ? 2 * dt : (Input.isDown('ArrowLeft') ? -2 * dt : 0);
+                }
+
+                // Always clamp player X, even when jumping
+                const margin = SCREEN_WIDTH * 0.15;
+                this.x = Math.max(margin, Math.min(SCREEN_WIDTH - margin - this.w, this.x));
+                // Suspension effect (visual only)
+                if (!this.isJumping) {
+                    // Bob up and down based on speed
+                    this.suspensionY = Math.sin(this.game.gameTime * this.game.scrollSpeed) * 2;
+                } else {
+                    this.suspensionY = 0;
+                }
+
+                // Shooting Forward
+                if (Input.isDown('FireFwd')) {
+                    const now = Date.now();
+                    if (now - this.lastShotTime > 300) { // 300ms cooldown
+                        this.shoot(true, false);
+                        this.lastShotTime = now;
+                    }
+                }
+
+                // Shooting Up
+                if (Input.isDown('ArrowUp')) {
+                    const now = Date.now();
+                    if (now - this.lastShotTime > 300) {
+                        this.shoot(false, true);
+                        this.lastShotTime = now;
+                    }
+                }
+
+                // Wheel Rotation (visual)
+                this.wheelRot += this.game.scrollSpeed * dt * 0.2;
+
+                if (this.isDead) this.deathFrames += dt;
+            }
+
+            shoot(fwd, up) {
+                Audio.playShoot();
+                if (fwd) {
+                    // Fire Forward
+                    this.game.projectiles.push(new Projectile(this.x + this.w, this.y + 10, 8, 0, true));
+                }
+                if (up) {
+                    // Fire Up
+                    this.game.projectiles.push(new Projectile(this.x + this.w / 2, this.y, 0, -8, true));
+                }
+            }
+
+            draw(ctx) {
+                if (this.isDead) {
+                    this.drawExplosion(ctx);
+                    return;
+                }
+                // Draw Body
+                const drawX = this.x;
+                const drawY = this.y + this.suspensionY;
+
+                const palette = {
+                    'R': COLOR_BUGGY,
+                    'G': '#444', // Glass
+                    'I': '#aaa'  // Gun
+                };
+                drawSprite(ctx, drawX, drawY, this.spriteScale, SPRITE_BUGGY, palette);
+                // Draw Gun on top (animated?)
+                // Let's use Sprite Gun
+                drawSprite(ctx, drawX + 15, drawY - 10, this.spriteScale, SPRITE_GUN, palette);
+
+                // Draw Wheels (3 wheels)
+                this.drawWheel(ctx, drawX + 5, drawY + 25);
+                this.drawWheel(ctx, drawX + 22, drawY + 25);
+                this.drawWheel(ctx, drawX + 39, drawY + 25);
+            }
+
+            drawExplosion(ctx) {
+                const colors = ['#f00', '#f80', '#ff0', '#fff'];
+                for (let i = 0; i < 15; i++) {
+                    const r = 2 + Math.random() * 10 * (this.deathFrames / 10);
+                    const ang = Math.random() * Math.PI * 2;
+                    const d = Math.random() * 30 * (this.deathFrames / 20);
+                    ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                    ctx.beginPath();
+                    ctx.arc(this.x + this.w / 2 + Math.cos(ang) * d, this.y + this.h / 2 + Math.sin(ang) * d, r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            drawWheel(ctx, x, y) {
+                const r = 8;
+                ctx.save();
+                ctx.translate(x + r, y + r);
+                ctx.rotate(this.wheelRot);
+                // Simple wheel drawing
+                ctx.fillStyle = '#111';
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#0f0';
+                ctx.lineWidth = 2;
+                // Spokes
+                ctx.beginPath();
+                ctx.moveTo(-r, 0); ctx.lineTo(r, 0);
+                ctx.moveTo(0, -r); ctx.lineTo(0, r);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            getBounds() {
+                return { x: this.x + 10, y: this.y + 10, w: this.w - 20, h: this.h - 10 };
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, dx, dy, isPlayerShot) {
+                this.x = x;
+                this.y = y;
+                this.dx = dx;
+                this.dy = dy;
+                this.isPlayerShot = isPlayerShot;
+                this.size = 6;
+                this.remove = false;
+            }
+
+            update(dt) {
+                this.x += this.dx * dt;
+                this.y += this.dy * dt;
+
+                if (this.x < 0 || this.x > SCREEN_WIDTH || this.y < 0 || this.y > SCREEN_HEIGHT) {
+                    this.remove = true;
+                }
+            }
+
+            draw(ctx) {
+                ctx.fillStyle = this.isPlayerShot ? '#fff' : '#f0f';
+                ctx.fillRect(this.x - 2, this.y - 2, 4, 4);
+            }
+
+            getBounds() {
+                return { x: this.x, y: this.y, w: 4, h: 4 };
+            }
+        }
+
+        class Obstacle {
+            constructor(game, type) {
+                this.game = game;
+                this.type = type; // 'ROCK' or 'CRATER'
+                this.w = 40;
+                this.h = 30;
+                this.x = SCREEN_WIDTH + 50;
+                this.y = GROUND_Y - this.h;
+                if (type === 'CRATER') {
+                    this.y = GROUND_Y + 5; // Slightly below line
+                    this.w = 50;
+                    this.h = 10;
+                }
+                this.remove = false;
+            }
+
+            update(dt, speed) {
+                this.x -= speed * dt;
+                if (this.x + this.w < -50) this.remove = true;
+            }
+
+            draw(ctx) {
+                if (this.type === 'ROCK') {
+                    // IMPROVED ROCK VISIBILITY
+                    // Lighter grey with highlight
+                    ctx.fillStyle = '#bbb';
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y + this.h);
+                    ctx.lineTo(this.x + this.w / 2, this.y);
+                    ctx.lineTo(this.x + this.w, this.y + this.h);
+                    ctx.fill();
+
+                    // Highlight
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                } else {
+                    // Crater
+                    // Draw hole
+                    ctx.fillStyle = '#000';
+                    ctx.beginPath();
+                    // Make CRATER wider and flatter perspective
+                    ctx.ellipse(this.x + this.w / 2, this.y + this.h / 2, this.w / 2, this.h / 2, 0, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Rim
+                    ctx.strokeStyle = '#632';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            }
+            getBounds() {
+                if (this.type === 'CRATER') {
+                    // Craters need a hitbox that represents the "hole".
+                    // Visual Y is GROUND_Y + 5.
+                    // Collisions need to overlap with player on ground (GROUND_Y - 40).
+                    // Let's raise the hitbox to GROUND_Y - 10.
+                    return { x: this.x + 5, y: this.y - 15, w: this.w - 10, h: this.h + 10 };
+                }
+                // Rocks
+                return { x: this.x + 5, y: this.y + 5, w: this.w - 10, h: this.h - 10 };
+            }
+        }
+
+        class Ufo {
+            constructor(game) {
+                this.game = game;
+                // Spawn ahead of player slightly, but randomize X relative to screen
+                this.x = SCREEN_WIDTH + 50;
+                this.y = 50 + Math.random() * 150;
+                this.targetY = this.y; // Keep height
+                this.timer = 0;
+                this.remove = false;
+                this.w = 40;
+                this.h = 20;
+
+                // Horizontal speed - they fly left!
+                this.speedX = 2 + Math.random() * 2;
+            }
+
+            update(dt, scrollSpeed) {
+                this.timer += dt * 0.05;
+                this.y += Math.sin(this.timer) * 0.5; // Slight bob
+
+                // Move left plus scroll speed?? 
+                // If they are flying towards us, they should move left faster than scroll?
+                // Let's make them move left independently of scroll speed to ensure they pass the screen
+                this.x -= this.speedX * dt;
+
+                // If they are too slow, the scroll speed might make them drift faster backwards
+                // If scrollSpeed is 5, and their speedX is 2, they move left at 2 relative to "world"?
+                // No, screen coordinates.
+                // If x decreases, they move Left on screen.
+                // Simple logic: They fly from Right to Left across the screen.
+                // They should eventually leave screen left.
+
+                if (this.x < -100) this.remove = true;
+
+                // Shoot randomly
+                if (Math.random() < 0.01) {
+                    this.shoot();
+                }
+            }
+            shoot() {
+                Audio.playUfoFire();
+                this.game.projectiles.push(new Projectile(this.x + this.w / 2, this.y + this.h, 0, 4, false));
+            }
+
+            draw(ctx) {
+                const palette = { 'Y': COLOR_UFO, 'R': '#f00' };
+                drawSprite(ctx, this.x, this.y, 4, SPRITE_UFO, palette);
+            }
+
+            getBounds() {
+                return { x: this.x, y: this.y, w: this.w, h: this.h };
+            }
+        }
+
+        class Background {
+            constructor(game) {
+                this.game = game;
+                this.mountainsX = 0;
+                this.hillsX = 0;
+                this.groundX = 0;
+
+                // Cache Background Layers
+                this.mountainsCanvas = this.preRenderLayer(COLOR_MOUNTAIN_FAR, 200, (ctx, x, y) => {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 600);
+                    ctx.lineTo(x, 600 - 150);
+                    ctx.lineTo(x + 100, 600 - 250);
+                    ctx.lineTo(x + 200, 600 - 120);
+                    ctx.lineTo(x + 300, 600 - 200);
+                    ctx.lineTo(x + 400, 600 - 150);
+                    ctx.lineTo(x + 500, 600 - 280);
+                    ctx.lineTo(x + 600, 600 - 180);
+                    ctx.lineTo(x + 800, 600 - 100);
+                    ctx.lineTo(x + 800, 600);
+                    ctx.fill();
+                });
+
+                this.hillsCanvas = this.preRenderLayer(COLOR_GROUND_HILLS, 350, (ctx, x, y) => {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 600);
+                    for (let i = 0; i <= 800; i += 50) {
+                        ctx.lineTo(x + i, 450 + Math.sin(i * 0.05) * 30);
+                    }
+                    ctx.lineTo(x + 800, 600);
+                    ctx.fill();
+                });
+            }
+
+            preRenderLayer(color, yBase, drawFn) {
+                const c = document.createElement('canvas');
+                c.width = SCREEN_WIDTH * 2; // Double width for seamless scroll
+                c.height = SCREEN_HEIGHT;
+                const ctx = c.getContext('2d');
+                ctx.fillStyle = color;
+                // Draw twice
+                drawFn(ctx, 0, yBase);
+                drawFn(ctx, SCREEN_WIDTH, yBase);
+                return c;
+            }
+
+            update(dt, speed) {
+                // Parallax layers move at different speeds
+                this.mountainsX -= speed * 0.1 * dt;
+                this.hillsX -= speed * 0.5 * dt;
+                this.groundX -= speed * 1.0 * dt;
+
+                // Wrap around
+                if (this.mountainsX <= -SCREEN_WIDTH) this.mountainsX += SCREEN_WIDTH;
+                if (this.hillsX <= -SCREEN_WIDTH) this.hillsX += SCREEN_WIDTH;
+                if (this.groundX <= -SCREEN_WIDTH) this.groundX += SCREEN_WIDTH;
+            }
+
+            draw(ctx) {
+                // Draw Cached Images
+                ctx.drawImage(this.mountainsCanvas, this.mountainsX, 0);
+                if (this.mountainsX > 0) ctx.drawImage(this.mountainsCanvas, this.mountainsX - SCREEN_WIDTH * 2, 0); // Safety, though not needed if logic right
+
+                ctx.drawImage(this.hillsCanvas, this.hillsX, 0);
+
+
+                // 3. Foreground Ground (Flat with texture) - Keeping dynamic as it's simple rects
+                ctx.fillStyle = COLOR_GROUND_DIRT;
+                ctx.fillRect(0, GROUND_Y, SCREEN_WIDTH, SCREEN_HEIGHT - GROUND_Y);
+
+                // Add scrolling texture markers to ground to show speed
+                ctx.fillStyle = '#b56015'; // Darker dirt
+                const markerSpacing = 100;
+                const offset = this.groundX % markerSpacing;
+                for (let i = 0; i < SCREEN_WIDTH + markerSpacing; i += markerSpacing) {
+                    ctx.fillRect(i + offset, GROUND_Y + 20, 40, 5);
+                    ctx.fillRect(i + offset + 50, GROUND_Y + 60, 20, 5);
+                }
+            }
+
+            drawLayer(ctx, offsetX, color, yBase, drawFn) {
+                // Deprecated by caching
+            }
+        }
+
+        // Utility
+        function rectIntersect(r1, r2) {
+            return !(r2.x > r1.x + r1.w ||
+                r2.x + r2.w < r1.x ||
+                r2.y > r1.y + r1.h ||
+                r2.y + r2.h < r1.y);
+        }
+
+        // Start Game Instance
+        const game = new Game();
+
+    </script>
+</body>
+
+</html>
